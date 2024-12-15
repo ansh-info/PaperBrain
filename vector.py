@@ -21,7 +21,7 @@ async def main():
     try:
         with open(
             "markdowns/articles.md", "r", encoding="utf-8"
-        ) as file:  # Replace with your .md file path
+        ) as file:  # Replace with your actual file path
             markdown_content = file.read()
         print("Successfully loaded markdown file")
     except Exception as e:
@@ -38,10 +38,12 @@ async def main():
     except Exception as e:
         print(f"No existing collection to delete: {e}")
 
-    # Create new collection
+    # Create new collection with correct dimension (768 instead of 384)
     client.create_collection(
         collection_name="papers",
-        vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+        vectors_config=VectorParams(
+            size=768, distance=Distance.COSINE
+        ),  # Changed to 768
     )
     print("Created new collection")
 
@@ -60,34 +62,35 @@ async def main():
 
     for row in rows:
         abstract = row.get("id", "")
-        if abstract == "None":
+        if abstract == "None" or not abstract:  # Skip if no abstract
+            print("Skipping paper with no abstract")
             continue
 
         try:
             title = row.find_all("td")[1].find("a").text
+            print(f"Processing: {title[:50]}...")
+
+            # Get embedding
+            text = f"{title}\n{abstract}"
+            embedding = await get_embedding(text)
+
+            # Create point
+            point = PointStruct(
+                id=str(uuid.uuid4()),
+                vector=embedding,
+                payload={"title": title, "abstract": abstract},
+            )
+
+            # Store in Qdrant
+            client.upsert(collection_name="papers", points=[point])
+            print(f"Successfully processed: {title[:50]}...")
+            papers.append({"title": title, "abstract": abstract})
+
         except Exception as e:
-            print(f"Error extracting title: {e}")
+            print(
+                f"Error processing paper {title[:50] if 'title' in locals() else 'unknown'}: {str(e)}"
+            )
             continue
-
-        if abstract:
-            try:
-                # Get embedding
-                text = f"{title}\n{abstract}"
-                embedding = await get_embedding(text)
-
-                # Create point
-                point = PointStruct(
-                    id=str(uuid.uuid4()),
-                    vector=embedding,
-                    payload={"title": title, "abstract": abstract},
-                )
-
-                # Store in Qdrant
-                client.upsert(collection_name="papers", points=[point])
-                print(f"Successfully processed: {title[:50]}...")
-                papers.append({"title": title, "abstract": abstract})
-            except Exception as e:
-                print(f"Error processing paper {title[:50]}...: {e}")
 
     print(f"\nProcessed {len(papers)} papers successfully")
 
@@ -105,6 +108,7 @@ async def main():
         for result in search_results:
             print(f"\nTitle: {result.payload['title']}")
             print(f"Score: {result.score}")
+            print(f"Abstract preview: {result.payload['abstract'][:200]}...")
 
 
 if __name__ == "__main__":
