@@ -4,37 +4,35 @@ import uuid
 import httpx
 from bs4 import BeautifulSoup
 from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, PointStruct, VectorParams
 
 
 async def get_embedding(text: str) -> list:
     async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                "http://localhost:11434/api/embeddings",
-                json={"model": "nomic-embed-text", "prompt": text},
-            )
-            result = response.json()
-            return result["embedding"]
-        except Exception as e:
-            print(f"Error getting embedding: {e}")
-            raise
+        response = await client.post(
+            "http://localhost:11434/api/embeddings",
+            json={"model": "nomic-embed-text", "prompt": text},
+        )
+        return response.json()["embedding"]
 
 
 async def main():
     # Initialize Qdrant client
     client = QdrantClient("localhost", port=6333)
 
-    # Create collection
+    # Delete existing collection if it exists
     try:
-        client.create_collection(
-            collection_name="papers",
-            vectors_config={
-                "size": 384,  # nomic-embed-text dimension
-                "distance": "Cosine",
-            },
-        )
+        client.delete_collection("papers")
+        print("Deleted existing collection")
     except Exception as e:
-        print(f"Collection might already exist: {e}")
+        print(f"No existing collection to delete: {e}")
+
+    # Create new collection
+    client.create_collection(
+        collection_name="papers",
+        vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+    )
+    print("Created new collection")
 
     # Parse markdown
     soup = BeautifulSoup(markdown_content, "html.parser")
@@ -51,31 +49,26 @@ async def main():
         title = row.find_all("td")[1].find("a").text
 
         if abstract:
-            # Get embedding
-            text = f"{title}\n{abstract}"
-            embedding = await get_embedding(text)
-
-            # Generate a UUID for the point ID
-            point_id = str(uuid.uuid4())
-
-            # Store in Qdrant
             try:
-                client.upsert(
-                    collection_name="papers",
-                    points=[
-                        {
-                            "id": point_id,  # Use UUID string instead of hash
-                            "vector": embedding,
-                            "payload": {"title": title, "abstract": abstract},
-                        }
-                    ],
+                # Get embedding
+                text = f"{title}\n{abstract}"
+                embedding = await get_embedding(text)
+
+                # Create point
+                point = PointStruct(
+                    id=str(uuid.uuid4()),  # Convert UUID to string
+                    vector=embedding,
+                    payload={"title": title, "abstract": abstract},
                 )
-                print(f"Successfully processed: {title}")
+
+                # Store in Qdrant
+                client.upsert(collection_name="papers", points=[point])
+                print(f"Successfully processed: {title[:50]}...")
                 papers.append({"title": title, "abstract": abstract})
             except Exception as e:
-                print(f"Error processing paper {title}: {e}")
+                print(f"Error processing paper {title[:50]}...: {e}")
 
-    # Test search
+    # Test search if we have papers
     if papers:
         test_query = "What are the main approaches for discovering governing equations from data?"
         search_embedding = await get_embedding(test_query)
@@ -92,6 +85,6 @@ async def main():
 
 
 if __name__ == "__main__":
-    # Your markdown content here as string
+    # Put your markdown content here
     markdown_content = """... test markdown content ..."""
     asyncio.run(main())
