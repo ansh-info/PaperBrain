@@ -16,11 +16,20 @@ with open("markdowns/article.md", "r") as f:
 
 async def get_embedding(text: str) -> list:
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://localhost:11434/api/embed",
-            json={"model": "nomic-embed-text", "prompt": text},
-        )
-        return response.json()["embedding"]
+        try:
+            response = await client.post(
+                "http://localhost:11434/api/embeddings",  # Note: changed from embed to embeddings
+                json={"model": "nomic-embed-text", "prompt": text},
+            )
+            result = response.json()
+            print("Embedding response:", result)
+            return result.get("embedding", [])
+        except Exception as e:
+            print(f"Error getting embedding: {e}")
+            print(
+                f"Response content: {response.text if 'response' in locals() else 'No response'}"
+            )
+            raise
 
 
 async def chat_with_context(query: str, context: str):
