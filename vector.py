@@ -17,6 +17,17 @@ async def get_embedding(text: str) -> list:
 
 
 async def main():
+    # Load the markdown content from file
+    try:
+        with open(
+            "markdowns/articles.md", "r", encoding="utf-8"
+        ) as file:  # Replace with your .md file path
+            markdown_content = file.read()
+        print("Successfully loaded markdown file")
+    except Exception as e:
+        print(f"Error loading file: {e}")
+        return
+
     # Initialize Qdrant client
     client = QdrantClient("localhost", port=6333)
 
@@ -34,19 +45,29 @@ async def main():
     )
     print("Created new collection")
 
-    # Parse markdown
+    # Parse markdown (which contains HTML)
     soup = BeautifulSoup(markdown_content, "html.parser")
-    papers = []
+    tbody = soup.find("tbody")
 
-    # Find all table rows
-    rows = soup.find("tbody").find_all("tr")
+    if tbody is None:
+        print("Could not find table body in the markdown content")
+        return
+
+    rows = tbody.find_all("tr")
+    print(f"Found {len(rows)} papers to process")
+
+    papers = []
 
     for row in rows:
         abstract = row.get("id", "")
         if abstract == "None":
             continue
 
-        title = row.find_all("td")[1].find("a").text
+        try:
+            title = row.find_all("td")[1].find("a").text
+        except Exception as e:
+            print(f"Error extracting title: {e}")
+            continue
 
         if abstract:
             try:
@@ -56,7 +77,7 @@ async def main():
 
                 # Create point
                 point = PointStruct(
-                    id=str(uuid.uuid4()),  # Convert UUID to string
+                    id=str(uuid.uuid4()),
                     vector=embedding,
                     payload={"title": title, "abstract": abstract},
                 )
@@ -67,6 +88,8 @@ async def main():
                 papers.append({"title": title, "abstract": abstract})
             except Exception as e:
                 print(f"Error processing paper {title[:50]}...: {e}")
+
+    print(f"\nProcessed {len(papers)} papers successfully")
 
     # Test search if we have papers
     if papers:
@@ -85,6 +108,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    # Put your markdown content here
-    markdown_content = """... test markdown content ..."""
     asyncio.run(main())
