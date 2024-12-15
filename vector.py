@@ -1,109 +1,114 @@
 import asyncio
+import uuid
 
 import httpx
 from bs4 import BeautifulSoup
 from qdrant_client import QdrantClient
-
-# # Your markdown content that you shared
-# markdown_content = """
-# # Copy paste your markdown content here as a string
-# """
-
-# Or read from file
-with open("markdowns/article.md", "r") as f:
-    markdown_content = f.read()
+from qdrant_client.models import Distance, PointStruct, VectorParams
 
 
 async def get_embedding(text: str) -> list:
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            "http://localhost:11434/api/embed",
+            "http://localhost:11434/api/embeddings",
             json={"model": "nomic-embed-text", "prompt": text},
         )
         return response.json()["embedding"]
 
 
-async def chat_with_context(query: str, context: str):
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://localhost:11434/api/generate",
-            json={
-                "model": "mistral",
-                "prompt": f"Context: {context}\n\nQuestion: {query}",
-            },
-        )
-        return response.json()["response"]
-
-
 async def main():
+    # Load the markdown content from file
+    try:
+        with open(
+            "markdowns/articles.md", "r", encoding="utf-8"
+        ) as file:  # Replace with your actual file path
+            markdown_content = file.read()
+        print("Successfully loaded markdown file")
+    except Exception as e:
+        print(f"Error loading file: {e}")
+        return
+
     # Initialize Qdrant client
     client = QdrantClient("localhost", port=6333)
 
-    # Create collection
+    # Delete existing collection if it exists
     try:
-        client.create_collection(
-            collection_name="papers",
-            vectors_config={
-                "size": 384,  # nomic-embed-text dimension
-                "distance": "Cosine",
-            },
-        )
+        client.delete_collection("papers")
+        print("Deleted existing collection")
     except Exception as e:
-        print(f"Collection might already exist: {e}")
+        print(f"No existing collection to delete: {e}")
 
-    # Parse markdown
+    # Create new collection with correct dimension (768 instead of 384)
+    client.create_collection(
+        collection_name="papers",
+        vectors_config=VectorParams(
+            size=768, distance=Distance.COSINE
+        ),  # Changed to 768
+    )
+    print("Created new collection")
+
+    # Parse markdown (which contains HTML)
     soup = BeautifulSoup(markdown_content, "html.parser")
-    papers = []
+    tbody = soup.find("tbody")
 
-    # Find all table rows
-    rows = soup.find("tbody").find_all("tr")
+    if tbody is None:
+        print("Could not find table body in the markdown content")
+        return
+
+    rows = tbody.find_all("tr")
+    print(f"Found {len(rows)} papers to process")
+
+    papers = []
 
     for row in rows:
         abstract = row.get("id", "")
-        title = row.find_all("td")[1].find("a").text
+        if abstract == "None" or not abstract:  # Skip if no abstract
+            print("Skipping paper with no abstract")
+            continue
 
-        if abstract and abstract != "None":
+        try:
+            title = row.find_all("td")[1].find("a").text
+            print(f"Processing: {title[:50]}...")
+
             # Get embedding
             text = f"{title}\n{abstract}"
             embedding = await get_embedding(text)
 
-            # Store in Qdrant
-            client.upsert(
-                collection_name="papers",
-                points=[
-                    {
-                        "id": hash(title),
-                        "vector": embedding,
-                        "payload": {"title": title, "abstract": abstract},
-                    }
-                ],
+            # Create point
+            point = PointStruct(
+                id=str(uuid.uuid4()),
+                vector=embedding,
+                payload={"title": title, "abstract": abstract},
             )
+
+            # Store in Qdrant
+            client.upsert(collection_name="papers", points=[point])
+            print(f"Successfully processed: {title[:50]}...")
             papers.append({"title": title, "abstract": abstract})
-            print(f"Processed: {title}")
 
-    # Test search and chat
-    test_query = (
-        "What are the main approaches for discovering governing equations from data?"
-    )
-    search_embedding = await get_embedding(test_query)
+        except Exception as e:
+            print(
+                f"Error processing paper {title[:50] if 'title' in locals() else 'unknown'}: {str(e)}"
+            )
+            continue
 
-    # Search similar papers
-    search_results = client.search(
-        collection_name="papers", query_vector=search_embedding, limit=2
-    )
+    print(f"\nProcessed {len(papers)} papers successfully")
 
-    # Build context from search results
-    context = "\n\n".join(
-        [
-            f"Title: {result.payload['title']}\nAbstract: {result.payload['abstract']}"
-            for result in search_results
-        ]
-    )
+    # Test search if we have papers
+    if papers:
+        test_query = "What are the main approaches for discovering governing equations from data?"
+        search_embedding = await get_embedding(test_query)
 
-    # Chat with context
-    response = await chat_with_context(test_query, context)
-    print("\nQuery:", test_query)
-    print("\nResponse:", response)
+        # Search similar papers
+        search_results = client.search(
+            collection_name="papers", query_vector=search_embedding, limit=2
+        )
+
+        print("\nSearch Results:")
+        for result in search_results:
+            print(f"\nTitle: {result.payload['title']}")
+            print(f"Score: {result.score}")
+            print(f"Abstract preview: {result.payload['abstract'][:200]}...")
 
 
 if __name__ == "__main__":
