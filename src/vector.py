@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import uuid
 from pathlib import Path
@@ -7,6 +8,35 @@ import httpx
 from bs4 import BeautifulSoup
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
+
+# File to store processed file hashes
+PROCESSED_FILES_LOG = "processed_files.json"
+
+
+def load_processed_files():
+    """Load the list of previously processed files"""
+    try:
+        if os.path.exists(PROCESSED_FILES_LOG):
+            with open(PROCESSED_FILES_LOG, "r") as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Error loading processed files log: {e}")
+    return {}
+
+
+def save_processed_files(processed_files):
+    """Save the list of processed files"""
+    try:
+        with open(PROCESSED_FILES_LOG, "w") as f:
+            json.dump(processed_files, f, indent=2)
+    except Exception as e:
+        print(f"Error saving processed files log: {e}")
+
+
+def get_file_hash(file_path):
+    """Get file hash and modification time"""
+    stats = os.stat(file_path)
+    return {"size": stats.st_size, "mtime": stats.st_mtime, "ctime": stats.st_ctime}
 
 
 async def get_embedding(text: str) -> list:
@@ -86,6 +116,9 @@ async def process_markdown_file(file_path: Path, client: QdrantClient) -> list:
 
 
 async def main():
+    # Load processed files log
+    processed_files = load_processed_files()
+
     # Directory containing markdown files
     directory = Path("markdowns")
     if not directory.exists():
@@ -98,12 +131,32 @@ async def main():
         print(f"No markdown files found in {directory}")
         return
 
-    print(f"Found {len(markdown_files)} markdown files to process")
+    print(f"Found {len(markdown_files)} markdown files to check")
 
     # Initialize Qdrant client
     client = QdrantClient("localhost", port=6333)
 
-    # Delete existing collection if it exists
+    # Filter out already processed files that haven't changed
+    files_to_process = []
+    for file_path in markdown_files:
+        file_hash = get_file_hash(file_path)
+        if str(file_path) in processed_files:
+            old_hash = processed_files[str(file_path)]
+            if (
+                old_hash["size"] == file_hash["size"]
+                and old_hash["mtime"] == file_hash["mtime"]
+            ):
+                print(f"Skipping already processed file: {file_path.name}")
+                continue
+        files_to_process.append(file_path)
+
+    if not files_to_process:
+        print("No new or modified files to process")
+        return
+
+    print(f"Processing {len(files_to_process)} new or modified files")
+
+    # Delete existing collection if we have files to process
     try:
         client.delete_collection("papers")
         print("Deleted existing collection")
@@ -117,14 +170,19 @@ async def main():
     )
     print("Created new collection")
 
-    # Process all files and collect papers
+    # Process files and collect papers
     all_papers = []
-    for file_path in markdown_files:
+    for file_path in files_to_process:
         papers = await process_markdown_file(file_path, client)
         all_papers.extend(papers)
+        # Update processed files log
+        processed_files[str(file_path)] = get_file_hash(file_path)
+
+    # Save updated processed files log
+    save_processed_files(processed_files)
 
     print(
-        f"\nProcessed {len(all_papers)} papers successfully across {len(markdown_files)} files"
+        f"\nProcessed {len(all_papers)} papers successfully across {len(files_to_process)} files"
     )
 
     # Test search if we have papers
