@@ -28,17 +28,41 @@ Please provide a comprehensive answer and cite specific papers when referring to
 
         try:
             async with httpx.AsyncClient() as client:
+                # First, ensure the model is pulled
                 response = await client.post(
-                    "http://localhost:11434/api/generate",
-                    json={"model": "mistral", "prompt": prompt, "stream": False},
+                    "http://localhost:11434/api/pull",
+                    json={"name": "mistral"},
                     timeout=30.0,
                 )
 
-                if response.status_code != 200:
-                    raise Exception(f"Error from Ollama API: {response.text}")
+                # Make the generate request
+                async with client.stream(
+                    "POST",
+                    "http://localhost:11434/api/generate",
+                    json={"model": "mistral", "prompt": prompt, "stream": True},
+                    timeout=30.0,
+                ) as response:
+                    if response.status_code != 200:
+                        raise Exception(
+                            f"Error from Ollama API: {await response.text()}"
+                        )
 
-                response_data = response.json()
-                return response_data.get("response", "No response generated")
+                    # Initialize an empty string to store the full response
+                    full_response = ""
+
+                    # Read the streaming response
+                    async for chunk in response.aiter_lines():
+                        if not chunk:
+                            continue
+
+                        try:
+                            chunk_data = json.loads(chunk)
+                            if "response" in chunk_data:
+                                full_response += chunk_data["response"]
+                        except json.JSONDecodeError:
+                            continue
+
+                    return full_response if full_response else "No response generated"
 
         except httpx.TimeoutException:
             return "Error: Request timed out. Please try again."
