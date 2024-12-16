@@ -1,0 +1,32 @@
+{
+  "Machine discovery of partial differential equations from spatiotemporal data: A sparse Bayesian learning framework._This study presents a general framework, namely, Sparse Spatiotemporal System Discovery (S3d), for d": {
+    "title": "Machine discovery of partial differential equations from spatiotemporal data: A sparse Bayesian learning framework.",
+    "source_file": "articles.md",
+    "id": "d3a98fcf-882a-4d25-945a-af1cd496b630"
+  },
+  "Machine Discovery of Partial Differential Equations from Spatiotemporal Data_The study presents a general framework for discovering underlying Partial Differential Equations (PD": {
+    "title": "Machine Discovery of Partial Differential Equations from Spatiotemporal Data",
+    "source_file": "articles.md",
+    "id": "31260d37-dadc-45da-bcfa-de683d1edfab"
+  },
+  "Discovering governing equations from data by sparse identification of nonlinear dynamical systems_Significance Understanding dynamic constraints and balances in nature has facilitated rapid developm": {
+    "title": "Discovering governing equations from data by sparse identification of nonlinear dynamical systems",
+    "source_file": "articles.md",
+    "id": "45bb13dd-8b64-491c-b3c9-e537a7d0336b"
+  },
+  "Sparsistent Model Discovery_Discovering the partial differential equations underlying spatio-temporal datasets from very limited": {
+    "title": "Sparsistent Model Discovery",
+    "source_file": "articles.md",
+    "id": "308a8642-0e27-4dc9-bbcf-a5473cfc872d"
+  },
+  "Supplementary material from \"Learning partial differential equations via data discovery and sparse optimization\"_We investigate the problem of learning an evolution equation directly from some given data. This wor": {
+    "title": "Supplementary material from \"Learning partial differential equations via data discovery and sparse optimization\"",
+    "source_file": "articles.md",
+    "id": "de6e38aa-edc0-4710-b5d4-5d74a1c9c38e"
+  },
+  "Data-Driven discovery of governing physical laws and their parametric dependencies in engineering, physics and biology_We propose a regression method based upon group sparsity that is capable of discovering parametrized": {
+    "title": "Data-Driven discovery of governing physical laws and their parametric dependencies in engineering, physics and biology",
+    "source_file": "articles.md",
+    "id": "283d6d3d-7011-49ef-95e6-9ab6f9ca6223"
+  }
+}

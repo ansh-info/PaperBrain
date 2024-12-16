@@ -9,34 +9,28 @@ from bs4 import BeautifulSoup
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
-# File to store processed file hashes
-PROCESSED_FILES_LOG = "processed_files.json"
+# File to store processed papers
+PROCESSED_PAPERS_LOG = "processed_papers.json"
 
 
-def load_processed_files():
-    """Load the list of previously processed files"""
+def load_processed_papers():
+    """Load the list of previously processed papers"""
     try:
-        if os.path.exists(PROCESSED_FILES_LOG):
-            with open(PROCESSED_FILES_LOG, "r") as f:
+        if os.path.exists(PROCESSED_PAPERS_LOG):
+            with open(PROCESSED_PAPERS_LOG, "r") as f:
                 return json.load(f)
     except Exception as e:
-        print(f"Error loading processed files log: {e}")
+        print(f"Error loading processed papers log: {e}")
     return {}
 
 
-def save_processed_files(processed_files):
-    """Save the list of processed files"""
+def save_processed_papers(processed_papers):
+    """Save the list of processed papers"""
     try:
-        with open(PROCESSED_FILES_LOG, "w") as f:
-            json.dump(processed_files, f, indent=2)
+        with open(PROCESSED_PAPERS_LOG, "w") as f:
+            json.dump(processed_papers, f, indent=2)
     except Exception as e:
-        print(f"Error saving processed files log: {e}")
-
-
-def get_file_hash(file_path):
-    """Get file hash and modification time"""
-    stats = os.stat(file_path)
-    return {"size": stats.st_size, "mtime": stats.st_mtime, "ctime": stats.st_ctime}
+        print(f"Error saving processed papers log: {e}")
 
 
 async def get_embedding(text: str) -> list:
@@ -48,7 +42,9 @@ async def get_embedding(text: str) -> list:
         return response.json()["embedding"]
 
 
-async def process_markdown_file(file_path: Path, client: QdrantClient) -> list:
+async def process_markdown_file(
+    file_path: Path, client: QdrantClient, processed_papers: dict
+) -> list:
     papers = []
     try:
         with open(file_path, "r", encoding="utf-8") as file:
@@ -64,7 +60,7 @@ async def process_markdown_file(file_path: Path, client: QdrantClient) -> list:
             return papers
 
         rows = tbody.find_all("tr")
-        print(f"Found {len(rows)} papers in {file_path.name}")
+        print(f"Found {len(rows)} papers to check in {file_path.name}")
 
         for row in rows:
             abstract = row.get("id", "")
@@ -74,7 +70,16 @@ async def process_markdown_file(file_path: Path, client: QdrantClient) -> list:
 
             try:
                 title = row.find_all("td")[1].find("a").text
-                print(f"Processing: {title[:50]}...")
+
+                # Create a unique identifier for this paper
+                paper_key = f"{title}_{abstract[:100]}"  # Using first 100 chars of abstract for uniqueness
+
+                # Check if we've already processed this paper
+                if paper_key in processed_papers:
+                    print(f"Skipping duplicate paper: {title[:50]}...")
+                    continue
+
+                print(f"Processing new paper: {title[:50]}...")
 
                 # Get embedding
                 text = f"{title}\n{abstract}"
@@ -94,6 +99,14 @@ async def process_markdown_file(file_path: Path, client: QdrantClient) -> list:
                 # Store in Qdrant
                 client.upsert(collection_name="papers", points=[point])
                 print(f"Successfully processed: {title[:50]}...")
+
+                # Add to processed papers
+                processed_papers[paper_key] = {
+                    "title": title,
+                    "source_file": file_path.name,
+                    "id": point.id,
+                }
+
                 papers.append(
                     {
                         "title": title,
@@ -116,8 +129,8 @@ async def process_markdown_file(file_path: Path, client: QdrantClient) -> list:
 
 
 async def main():
-    # Load processed files log
-    processed_files = load_processed_files()
+    # Load processed papers log
+    processed_papers = load_processed_papers()
 
     # Directory containing markdown files
     directory = Path("markdowns")
@@ -131,35 +144,17 @@ async def main():
         print(f"No markdown files found in {directory}")
         return
 
-    print(f"Found {len(markdown_files)} markdown files to check")
+    print(f"Found {len(markdown_files)} markdown files to process")
 
     # Initialize Qdrant client
     client = QdrantClient("localhost", port=6333)
 
-    # Filter out already processed files that haven't changed
-    files_to_process = []
-    for file_path in markdown_files:
-        file_hash = get_file_hash(file_path)
-        if str(file_path) in processed_files:
-            old_hash = processed_files[str(file_path)]
-            if (
-                old_hash["size"] == file_hash["size"]
-                and old_hash["mtime"] == file_hash["mtime"]
-            ):
-                print(f"Skipping already processed file: {file_path.name}")
-                continue
-        files_to_process.append(file_path)
-
-    if not files_to_process:
-        print("No new or modified files to process")
-        return
-
-    print(f"Processing {len(files_to_process)} new or modified files")
-
-    # Delete existing collection if we have files to process
+    # Delete existing collection if it exists
     try:
         client.delete_collection("papers")
         print("Deleted existing collection")
+        # Clear processed papers log when collection is deleted
+        processed_papers = {}
     except Exception as e:
         print(f"No existing collection to delete: {e}")
 
@@ -170,19 +165,17 @@ async def main():
     )
     print("Created new collection")
 
-    # Process files and collect papers
+    # Process all files and collect papers
     all_papers = []
-    for file_path in files_to_process:
-        papers = await process_markdown_file(file_path, client)
+    for file_path in markdown_files:
+        papers = await process_markdown_file(file_path, client, processed_papers)
         all_papers.extend(papers)
-        # Update processed files log
-        processed_files[str(file_path)] = get_file_hash(file_path)
 
-    # Save updated processed files log
-    save_processed_files(processed_files)
+    # Save processed papers log
+    save_processed_papers(processed_papers)
 
     print(
-        f"\nProcessed {len(all_papers)} papers successfully across {len(files_to_process)} files"
+        f"\nProcessed {len(all_papers)} unique papers successfully across {len(markdown_files)} files"
     )
 
     # Test search if we have papers
