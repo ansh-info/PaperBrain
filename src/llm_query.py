@@ -9,6 +9,7 @@ from qdrant_client import QdrantClient
 class PaperSearcher:
     def __init__(self):
         self.client = QdrantClient("localhost", port=6333)
+        self.model_name = "llama3.2:1b"
 
     async def get_embedding(self, text: str) -> list:
         async with httpx.AsyncClient() as client:
@@ -28,46 +29,35 @@ Please provide a comprehensive answer and cite specific papers when referring to
 
         try:
             async with httpx.AsyncClient() as client:
-                # First, ensure the model is pulled
-                response = await client.post(
+                # First pull the model
+                print(f"Ensuring {self.model_name} model is available...")
+                await client.post(
                     "http://localhost:11434/api/pull",
-                    json={"name": "mistral"},
-                    timeout=30.0,
+                    json={"name": self.model_name},
+                    timeout=60.0,
                 )
 
-                # Make the generate request
-                async with client.stream(
-                    "POST",
+                # Generate response
+                response = await client.post(
                     "http://localhost:11434/api/generate",
-                    json={"model": "mistral", "prompt": prompt, "stream": True},
-                    timeout=30.0,
-                ) as response:
-                    if response.status_code != 200:
-                        raise Exception(
-                            f"Error from Ollama API: {await response.text()}"
-                        )
+                    json={"model": self.model_name, "prompt": prompt, "stream": False},
+                    timeout=60.0,
+                )
 
-                    # Initialize an empty string to store the full response
-                    full_response = ""
+                if response.status_code != 200:
+                    error_text = await response.text()
+                    raise Exception(f"Error from Ollama API: {error_text}")
 
-                    # Read the streaming response
-                    async for chunk in response.aiter_lines():
-                        if not chunk:
-                            continue
+                response_data = response.json()
+                if "error" in response_data:
+                    raise Exception(response_data["error"])
 
-                        try:
-                            chunk_data = json.loads(chunk)
-                            if "response" in chunk_data:
-                                full_response += chunk_data["response"]
-                        except json.JSONDecodeError:
-                            continue
-
-                    return full_response if full_response else "No response generated"
+                return response_data.get("response", "No response generated")
 
         except httpx.TimeoutException:
             return "Error: Request timed out. Please try again."
         except Exception as e:
-            return f"Error: Unable to generate response. Please ensure Ollama is running and mistral model is installed. Error: {str(e)}"
+            return f"Error: Unable to generate response. Details: {str(e)}"
 
     async def search_papers(self, query: str, limit: int = 3) -> List[Dict]:
         try:
@@ -91,7 +81,7 @@ Please provide a comprehensive answer and cite specific papers when referring to
             for result in results
         )
 
-        print("Generating response from AI...")
+        print(f"Generating response using {self.model_name}...")
         llm_response = await self.get_llm_response(query, context)
 
         return results, llm_response
