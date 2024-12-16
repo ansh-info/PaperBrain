@@ -1,4 +1,5 @@
 import asyncio
+import json
 from typing import Dict, List
 
 import httpx
@@ -26,26 +27,48 @@ Context from relevant papers:
 
 Please provide a comprehensive answer and cite specific papers when referring to information from them."""
 
-            response = await client.post(
-                "http://localhost:11434/api/generate",
-                json={"model": "mistral", "prompt": prompt},
-            )
-            return response.json()["response"]
+            try:
+                # Stream the response
+                async with client.stream(
+                    "POST",
+                    "http://localhost:11434/api/generate",
+                    json={
+                        "model": "mistral",
+                        "prompt": prompt,
+                        "stream": False,  # Don't stream the response
+                    },
+                ) as response:
+                    if response.status_code != 200:
+                        raise Exception(f"Error from Ollama API: {response.text}")
+
+                    response_data = await response.json()
+                    return response_data.get("response", "")
+
+            except Exception as e:
+                print(f"Error getting LLM response: {e}")
+                return f"Error: Unable to generate response. Please ensure Ollama is running and mistral model is installed. Error: {str(e)}"
 
     async def search_papers(self, query: str, limit: int = 3) -> List[Dict]:
-        # Get embedding for the query
-        query_embedding = await self.get_embedding(query)
+        try:
+            # Get embedding for the query
+            query_embedding = await self.get_embedding(query)
 
-        # Search in Qdrant
-        search_results = self.client.search(
-            collection_name="papers", query_vector=query_embedding, limit=limit
-        )
+            # Search in Qdrant
+            search_results = self.client.search(
+                collection_name="papers", query_vector=query_embedding, limit=limit
+            )
 
-        return search_results
+            return search_results
+        except Exception as e:
+            print(f"Error during search: {e}")
+            return []
 
     async def search_and_respond(self, query: str, limit: int = 3):
         # Get relevant papers
         results = await self.search_papers(query, limit)
+
+        if not results:
+            return [], "No relevant papers found."
 
         # Build context from relevant papers
         context = "\n\n".join(
@@ -56,21 +79,31 @@ Please provide a comprehensive answer and cite specific papers when referring to
         )
 
         # Get LLM response
+        print("Generating response from AI...")
         llm_response = await self.get_llm_response(query, context)
 
         return results, llm_response
 
     def display_results(self, results, llm_response):
-        print("\nAI Response:")
-        print("=" * 80)
-        print(llm_response)
-        print("\nRelevant Papers:")
-        print("=" * 80)
-        for i, result in enumerate(results, 1):
-            print(f"\n{i}. Title: {result.payload['title']}")
-            print(f"Relevance Score: {result.score:.2f}")
-            print(f"Abstract preview: {result.payload['abstract'][:200]}...")
-            print("-" * 80)
+        if llm_response.startswith("Error:"):
+            print("\nError in AI Response:")
+            print("=" * 80)
+            print(llm_response)
+        else:
+            print("\nAI Response:")
+            print("=" * 80)
+            print(llm_response)
+
+        if results:
+            print("\nRelevant Papers:")
+            print("=" * 80)
+            for i, result in enumerate(results, 1):
+                print(f"\n{i}. Title: {result.payload['title']}")
+                print(f"Relevance Score: {result.score:.2f}")
+                print(f"Abstract preview: {result.payload['abstract'][:200]}...")
+                print("-" * 80)
+        else:
+            print("\nNo relevant papers found.")
 
 
 async def main():
