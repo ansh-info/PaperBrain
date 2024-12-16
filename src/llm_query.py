@@ -19,66 +19,54 @@ class PaperSearcher:
             return response.json()["embedding"]
 
     async def get_llm_response(self, query: str, context: str) -> str:
-        async with httpx.AsyncClient() as client:
-            prompt = f"""Based on the following research papers, please answer this question: {query}
+        prompt = f"""Based on the following research papers, please answer this question: {query}
 
 Context from relevant papers:
 {context}
 
 Please provide a comprehensive answer and cite specific papers when referring to information from them."""
 
-            try:
-                # Stream the response
-                async with client.stream(
-                    "POST",
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
                     "http://localhost:11434/api/generate",
-                    json={
-                        "model": "mistral",
-                        "prompt": prompt,
-                        "stream": False,  # Don't stream the response
-                    },
-                ) as response:
-                    if response.status_code != 200:
-                        raise Exception(f"Error from Ollama API: {response.text}")
+                    json={"model": "mistral", "prompt": prompt, "stream": False},
+                    timeout=30.0,
+                )
 
-                    response_data = await response.json()
-                    return response_data.get("response", "")
+                if response.status_code != 200:
+                    raise Exception(f"Error from Ollama API: {response.text}")
 
-            except Exception as e:
-                print(f"Error getting LLM response: {e}")
-                return f"Error: Unable to generate response. Please ensure Ollama is running and mistral model is installed. Error: {str(e)}"
+                response_data = response.json()
+                return response_data.get("response", "No response generated")
+
+        except httpx.TimeoutException:
+            return "Error: Request timed out. Please try again."
+        except Exception as e:
+            return f"Error: Unable to generate response. Please ensure Ollama is running and mistral model is installed. Error: {str(e)}"
 
     async def search_papers(self, query: str, limit: int = 3) -> List[Dict]:
         try:
-            # Get embedding for the query
             query_embedding = await self.get_embedding(query)
-
-            # Search in Qdrant
             search_results = self.client.search(
                 collection_name="papers", query_vector=query_embedding, limit=limit
             )
-
             return search_results
         except Exception as e:
             print(f"Error during search: {e}")
             return []
 
     async def search_and_respond(self, query: str, limit: int = 3):
-        # Get relevant papers
         results = await self.search_papers(query, limit)
 
         if not results:
             return [], "No relevant papers found."
 
-        # Build context from relevant papers
         context = "\n\n".join(
-            [
-                f"Title: {result.payload['title']}\nAbstract: {result.payload['abstract']}"
-                for result in results
-            ]
+            f"Title: {result.payload['title']}\nAbstract: {result.payload['abstract']}"
+            for result in results
         )
 
-        # Get LLM response
         print("Generating response from AI...")
         llm_response = await self.get_llm_response(query, context)
 
