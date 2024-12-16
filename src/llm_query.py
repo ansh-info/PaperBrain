@@ -9,6 +9,7 @@ from qdrant_client import QdrantClient
 class PaperSearcher:
     def __init__(self):
         self.client = QdrantClient("localhost", port=6333)
+        self.model_name = "llama3.2:1b"
 
     async def get_embedding(self, text: str) -> list:
         async with httpx.AsyncClient() as client:
@@ -19,67 +20,68 @@ class PaperSearcher:
             return response.json()["embedding"]
 
     async def get_llm_response(self, query: str, context: str) -> str:
-        async with httpx.AsyncClient() as client:
-            prompt = f"""Based on the following research papers, please answer this question: {query}
+        prompt = f"""Based on the following research papers, please answer this question: {query}
 
 Context from relevant papers:
 {context}
 
 Please provide a comprehensive answer and cite specific papers when referring to information from them."""
 
-            try:
-                # Stream the response
-                async with client.stream(
-                    "POST",
+        try:
+            async with httpx.AsyncClient() as client:
+                # First pull the model
+                print(f"Ensuring {self.model_name} model is available...")
+                await client.post(
+                    "http://localhost:11434/api/pull",
+                    json={"name": self.model_name},
+                    timeout=60.0,
+                )
+
+                # Generate response
+                response = await client.post(
                     "http://localhost:11434/api/generate",
-                    json={
-                        "model": "mistral",
-                        "prompt": prompt,
-                        "stream": False,  # Don't stream the response
-                    },
-                ) as response:
-                    if response.status_code != 200:
-                        raise Exception(f"Error from Ollama API: {response.text}")
+                    json={"model": self.model_name, "prompt": prompt, "stream": False},
+                    timeout=60.0,
+                )
 
-                    response_data = await response.json()
-                    return response_data.get("response", "")
+                if response.status_code != 200:
+                    error_text = await response.text()
+                    raise Exception(f"Error from Ollama API: {error_text}")
 
-            except Exception as e:
-                print(f"Error getting LLM response: {e}")
-                return f"Error: Unable to generate response. Please ensure Ollama is running and mistral model is installed. Error: {str(e)}"
+                response_data = response.json()
+                if "error" in response_data:
+                    raise Exception(response_data["error"])
+
+                return response_data.get("response", "No response generated")
+
+        except httpx.TimeoutException:
+            return "Error: Request timed out. Please try again."
+        except Exception as e:
+            return f"Error: Unable to generate response. Details: {str(e)}"
 
     async def search_papers(self, query: str, limit: int = 3) -> List[Dict]:
         try:
-            # Get embedding for the query
             query_embedding = await self.get_embedding(query)
-
-            # Search in Qdrant
             search_results = self.client.search(
                 collection_name="papers", query_vector=query_embedding, limit=limit
             )
-
             return search_results
         except Exception as e:
             print(f"Error during search: {e}")
             return []
 
     async def search_and_respond(self, query: str, limit: int = 3):
-        # Get relevant papers
         results = await self.search_papers(query, limit)
 
         if not results:
             return [], "No relevant papers found."
 
-        # Build context from relevant papers
         context = "\n\n".join(
-            [
-                f"Title: {result.payload['title']}\nAbstract: {result.payload['abstract']}"
-                for result in results
-            ]
+            f"Title: {result.payload['title']}\nAbstract: {result.payload['abstract']}"
+            for result in results
         )
 
-        # Get LLM response
-        print("Generating response from AI...")
+        print(f"Generating response using {self.model_name}...")
         llm_response = await self.get_llm_response(query, context)
 
         return results, llm_response
