@@ -26,104 +26,85 @@ class PaperSearcher:
             return response.json()["embedding"]
 
     async def get_llm_response(self, query: str, context: str) -> str:
-    # More explicit and structured prompt
-    prompt = f"""You are a research assistant helping to analyze scientific papers. Please provide a comprehensive answer to the following question based on the provided research papers.
+        prompt = f"""Based on the following research papers, please answer this question: {query}
 
-Question: {query}
-
-Available papers:
+Context from relevant papers:
 {context}
 
-Please structure your response in the following format:
+Please provide a comprehensive answer in the following format:
 
-**Main Answer**
-[Provide a concise but thorough answer to the question, synthesizing information from the papers]
+MAIN ANSWER:
+A clear, concise answer addressing the main question. Reference papers using [P1], [P2], etc.
 
-**Key Points**
-* [First key finding or point from the papers]
-* [Second key finding or point from the papers]
-* [Additional key points as needed]
+KEY POINTS:
+• Point 1 [P1]: Specific finding or contribution
+• Point 2 [P2]: Specific finding or contribution
+• Point 3 [P1, P3]: Specific finding or contribution
+(Add more points as needed, always with clear paper references)
 
-**Paper Citations**
-* [Paper 1]: [Brief description of its contribution]
-* [Paper 2]: [Brief description of its contribution]
-* [Additional papers as needed]
+PAPER CITATIONS:
+For each paper discussed above:
+[P1] Title and key contributions discussed
+[P2] Title and key contributions discussed
+[P3] Title and key contributions discussed
 
-**Limitations**
-* [First limitation or gap in the available information]
-* [Second limitation or gap in the available information]
-* [Additional limitations as needed]
+Always use [P1], [P2], etc. consistently throughout the response.
+"""
 
-References:
-[List the full citations of all papers used]
+        try:
+            async with httpx.AsyncClient() as client:
+                print(f"Ensuring {self.model_name} model is available...")
+                await client.post(
+                    "http://localhost:11434/api/pull",
+                    json={"name": self.model_name},
+                    timeout=60.0,
+                )
 
-Remember to:
-1. Be specific and cite papers when making claims
-2. Focus on the main findings relevant to the question
-3. Acknowledge any limitations in the available information"""
+                response = await client.post(
+                    "http://localhost:11434/api/generate",
+                    json={
+                        "model": self.model_name,
+                        "prompt": prompt,
+                        "stream": False,
+                        "temperature": 0.7,
+                        "top_p": 0.9,
+                    },
+                    timeout=60.0,
+                )
 
-    try:
-        async with httpx.AsyncClient() as client:
-            print(f"Ensuring {self.model_name} model is available...")
-            await client.post(
-                "http://localhost:11434/api/pull",
-                json={"name": self.model_name},
-                timeout=60.0,
+                if response.status_code != 200:
+                    error_text = await response.text()
+                    raise Exception(f"Error from Ollama API: {error_text}")
+
+                response_data = response.json()
+                if "error" in response_data:
+                    raise Exception(response_data["error"])
+
+                self.conversation_history.append(
+                    {
+                        "timestamp": datetime.now().isoformat(),
+                        "query": query,
+                        "response": response_data.get("response", ""),
+                        "num_papers": len(context.split("Title:")) - 1,
+                    }
+                )
+
+                return response_data.get("response", "No response generated")
+
+        except httpx.TimeoutException:
+            return "Error: Request timed out. Please try again."
+        except Exception as e:
+            return f"Error: Unable to generate response. Details: {str(e)}"
+
+    def format_section(self, text: str, section: str) -> str:
+        """Format a section of the response with proper indentation and wrapping."""
+        lines = []
+        for line in text.split("\n"):
+            wrapped = textwrap.fill(
+                line, width=80, initial_indent="    ", subsequent_indent="    "
             )
-
-            response = await client.post(
-                "http://localhost:11434/api/generate",
-                json={
-                    "model": self.model_name,
-                    "prompt": prompt,
-                    "stream": False,
-                    "temperature": 0.7,
-                    "top_p": 0.9,
-                    "top_k": 40,  # Added for better response quality
-                    "repeat_penalty": 1.1,  # Helps avoid repetition
-                    "max_tokens": 2048,  # Ensure enough tokens for full response
-                },
-                timeout=120.0,  # Increased timeout for longer responses
-            )
-
-            if response.status_code != 200:
-                error_text = await response.text()
-                raise Exception(f"Error from Ollama API: {error_text}")
-
-            response_data = response.json()
-            if "error" in response_data:
-                raise Exception(response_data["error"])
-
-            # Log the Q&A interaction
-            self.conversation_history.append({
-                "timestamp": datetime.now().isoformat(),
-                "query": query,
-                "response": response_data.get("response", ""),
-                "num_papers": len(context.split("Title:")) - 1,
-            })
-
-            # Post-process the response to ensure proper formatting
-            response_text = response_data.get("response", "")
-            if "**Main Answer**" not in response_text:
-                # If response isn't properly formatted, restructure it
-                response_text = f"""**Main Answer**
-{response_text}
-
-**Key Points**
-* Key findings from the response
-
-**Paper Citations**
-* Citations from the provided papers
-
-**Limitations**
-* Potential limitations of the analysis"""
-
-            return response_text
-
-    except httpx.TimeoutException:
-        return "Error: Request timed out. Please try again."
-    except Exception as e:
-        return f"Error: Unable to generate response. Details: {str(e)}" 
+            lines.append(wrapped)
+        return f"{section}:\n" + "\n".join(lines)
 
     def explain_relevance_score(self, score: float) -> str:
         """Explain the relevance score in human terms"""
@@ -218,88 +199,106 @@ Remember to:
         return results, llm_response
 
     def display_results(self, results, llm_response):
+        """
+        Display the LLM response and search results in a well-formatted structure.
+
+        Args:
+            results: List of search results from Qdrant
+            llm_response: String response from the LLM
+        """
         if llm_response.startswith("Error:"):
             print("\nError in AI Response:")
             print("=" * 80)
             print(llm_response)
-        else:
-            print("\nAI Response:")
-            print("=" * 80)
+            return
 
-            # Split response into sections based on markdown-style headers
-            sections = llm_response.split("**")
+        print("\nAI Response:")
+        print("=" * 80)
 
-            for i, section in enumerate(sections):
-                if i == 0:  # Skip first empty section
-                    continue
+        sections = {"MAIN ANSWER": [], "KEY POINTS": [], "PAPER CITATIONS": []}
 
-                # Process each section
-                if section.startswith("Main Answer"):
-                    print("\nMAIN ANSWER")
-                    print("-" * 40)
-                    content = section.replace("Main Answer**", "").strip()
-                    print(textwrap.fill(content, width=80))
+        current_section = None
+        current_content = []
 
-                elif section.startswith("Key Points"):
-                    print("\nKEY POINTS")
-                    print("-" * 40)
-                    content = section.replace("Key Points**", "").strip()
-                    # Split and format bullet points
-                    points = content.split("*")
-                    for point in points:
-                        if point.strip():
-                            print(
-                                textwrap.fill(
-                                    point.strip(),
-                                    width=80,
-                                    initial_indent="• ",
-                                    subsequent_indent="  ",
-                                )
-                            )
+        # Parse the response into sections
+        for line in llm_response.split("\n"):
+            line = line.strip()
 
-                elif section.startswith("Paper Citations"):
-                    print("\nPAPER CITATIONS")
-                    print("-" * 40)
-                    content = section.replace("Paper Citations**", "").strip()
-                    citations = content.split("*")
-                    for citation in citations:
-                        if citation.strip():
-                            print(f"• {citation.strip()}")
+            upper_line = line.upper()
+            if any(section in upper_line for section in sections.keys()):
+                if current_section and current_content:
+                    sections[current_section] = current_content
+                current_section = next(
+                    (k for k in sections.keys() if k in upper_line), None
+                )
+                current_content = []
+            elif current_section and line:
+                # Remove any existing bullet points or asterisks
+                line = line.lstrip("•").lstrip("*").strip()
+                # Replace numbered citations with P-style citations
+                for i in range(1, 10):
+                    line = line.replace(f"[{i}]", f"[P{i}]")
+                    line = line.replace(f"paper {i}", f"paper [P{i}]")
+                    line = line.replace(f"Paper {i}", f"Paper [P{i}]")
+                current_content.append(line)
 
-                elif section.startswith("Limitations"):
-                    print("\nLIMITATIONS")
-                    print("-" * 40)
-                    content = section.replace("Limitations**", "").strip()
-                    limitations = content.split("*")
-                    for limitation in limitations:
-                        if limitation.strip():
-                            print(
-                                textwrap.fill(
-                                    limitation.strip(),
-                                    width=80,
-                                    initial_indent="• ",
-                                    subsequent_indent="  ",
-                                )
-                            )
+        # Add the last section
+        if current_section and current_content:
+            sections[current_section] = current_content
 
-            # Display references if present
-            if "References:" in llm_response:
-                print("\nREFERENCES")
-                print("-" * 40)
-                refs_section = llm_response.split("References:")[1].strip()
-                refs = refs_section.split("[")
-                for ref in refs:
-                    if ref.strip():
-                        print(
-                            textwrap.fill(
-                                f"[{ref.strip()}",
-                                width=80,
-                                initial_indent="",
-                                subsequent_indent="  ",
-                            )
-                        )
+        # Display Main Answer
+        print("\nMAIN ANSWER:")
+        print("-" * 40)
+        main_answer_text = " ".join(sections.get("MAIN ANSWER", []))
+        print(
+            textwrap.fill(
+                main_answer_text,
+                width=80,
+                initial_indent="    ",
+                subsequent_indent="    ",
+            )
+        )
 
-        # Display Paper Results
+        # Display Key Points
+        print("\nKEY POINTS:")
+        print("-" * 40)
+        for line in sections.get("KEY POINTS", []):
+            if line.strip():
+                # Add citation reference if missing
+                if not any(f"[P{i}]" in line for i in range(1, len(results) + 1)):
+                    line += " [P1]"  # Default to P1 if no citation is present
+
+                wrapped_text = textwrap.fill(
+                    line, width=80, initial_indent="    • ", subsequent_indent="      "
+                )
+                print(wrapped_text)
+
+        # Display Paper Citations
+        print("\nPAPER CITATIONS:")
+        print("-" * 40)
+        for i, result in enumerate(results, 1):
+            title = result.payload["title"]
+            score = result.score
+            source = result.payload.get("source_file", "N/A")
+
+            print(f"    [P{i}] {title}")
+            print(f"         Relevance Score: {score:.2f}")
+            print(f"         Source: {source}")
+
+            if "abstract" in result.payload:
+                abstract = result.payload["abstract"]
+                if len(abstract) > 200:
+                    abstract = abstract[:200] + "..."
+                wrapped_abstract = textwrap.fill(
+                    abstract,
+                    width=76,
+                    initial_indent="         Abstract: ",
+                    subsequent_indent="                   ",
+                )
+                print(wrapped_abstract)
+            print()
+
+        # Display Relevant Papers section
         if results:
             print("\nRelevant Papers:")
             print("=" * 80)
