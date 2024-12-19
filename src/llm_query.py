@@ -179,7 +179,6 @@ Reference the papers as [Paper 1], [Paper 2], etc. in your response."""
         return results, llm_response
 
     def display_results(self, results, llm_response):
-        # Display AI Response
         if llm_response.startswith("Error:"):
             print("\nError in AI Response:")
             print("=" * 80)
@@ -187,9 +186,79 @@ Reference the papers as [Paper 1], [Paper 2], etc. in your response."""
         else:
             print("\nAI Response:")
             print("=" * 80)
-            # Format the response with proper wrapping
-            formatted_response = textwrap.fill(llm_response, width=80)
-            print(formatted_response)
+
+            # Split response into sections based on markdown-style headers
+            sections = llm_response.split("**")
+
+            for i, section in enumerate(sections):
+                if i == 0:  # Skip first empty section
+                    continue
+
+                # Process each section
+                if section.startswith("Main Answer"):
+                    print("\nMAIN ANSWER")
+                    print("-" * 40)
+                    content = section.replace("Main Answer**", "").strip()
+                    print(textwrap.fill(content, width=80))
+
+                elif section.startswith("Key Points"):
+                    print("\nKEY POINTS")
+                    print("-" * 40)
+                    content = section.replace("Key Points**", "").strip()
+                    # Split and format bullet points
+                    points = content.split("*")
+                    for point in points:
+                        if point.strip():
+                            print(
+                                textwrap.fill(
+                                    point.strip(),
+                                    width=80,
+                                    initial_indent="• ",
+                                    subsequent_indent="  ",
+                                )
+                            )
+
+                elif section.startswith("Paper Citations"):
+                    print("\nPAPER CITATIONS")
+                    print("-" * 40)
+                    content = section.replace("Paper Citations**", "").strip()
+                    citations = content.split("*")
+                    for citation in citations:
+                        if citation.strip():
+                            print(f"• {citation.strip()}")
+
+                elif section.startswith("Limitations"):
+                    print("\nLIMITATIONS")
+                    print("-" * 40)
+                    content = section.replace("Limitations**", "").strip()
+                    limitations = content.split("*")
+                    for limitation in limitations:
+                        if limitation.strip():
+                            print(
+                                textwrap.fill(
+                                    limitation.strip(),
+                                    width=80,
+                                    initial_indent="• ",
+                                    subsequent_indent="  ",
+                                )
+                            )
+
+            # Display references if present
+            if "References:" in llm_response:
+                print("\nREFERENCES")
+                print("-" * 40)
+                refs_section = llm_response.split("References:")[1].strip()
+                refs = refs_section.split("[")
+                for ref in refs:
+                    if ref.strip():
+                        print(
+                            textwrap.fill(
+                                f"[{ref.strip()}",
+                                width=80,
+                                initial_indent="",
+                                subsequent_indent="  ",
+                            )
+                        )
 
         # Display Paper Results
         if results:
@@ -202,7 +271,6 @@ Reference the papers as [Paper 1], [Paper 2], etc. in your response."""
                     f"Relevance Explanation: {self.explain_relevance_score(result.score)}"
                 )
 
-                # Format abstract with proper wrapping
                 abstract_preview = textwrap.fill(
                     (
                         result.payload["abstract"][:300] + "..."
