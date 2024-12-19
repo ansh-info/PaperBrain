@@ -26,65 +26,104 @@ class PaperSearcher:
             return response.json()["embedding"]
 
     async def get_llm_response(self, query: str, context: str) -> str:
-        # Enhanced prompt with more structure
-        prompt = f"""Based on the following research papers, please answer this question: {query}
+    # More explicit and structured prompt
+    prompt = f"""You are a research assistant helping to analyze scientific papers. Please provide a comprehensive answer to the following question based on the provided research papers.
 
-Context from relevant papers:
+Question: {query}
+
+Available papers:
 {context}
 
-Please provide a comprehensive answer in the following format:
-1. Main Answer: A direct response to the question
-2. Key Points: Bullet points of important findings
-3. Paper Citations: Explicitly cite which papers support each point
-4. Limitations: Any limitations or gaps in the available information
+Please structure your response in the following format:
 
-Reference the papers as [Paper 1], [Paper 2], etc. in your response."""
+**Main Answer**
+[Provide a concise but thorough answer to the question, synthesizing information from the papers]
 
-        try:
-            async with httpx.AsyncClient() as client:
-                print(f"Ensuring {self.model_name} model is available...")
-                await client.post(
-                    "http://localhost:11434/api/pull",
-                    json={"name": self.model_name},
-                    timeout=60.0,
-                )
+**Key Points**
+* [First key finding or point from the papers]
+* [Second key finding or point from the papers]
+* [Additional key points as needed]
 
-                response = await client.post(
-                    "http://localhost:11434/api/generate",
-                    json={
-                        "model": self.model_name,
-                        "prompt": prompt,
-                        "stream": False,
-                        "temperature": 0.7,  # Added temperature control
-                        "top_p": 0.9,  # Added top_p sampling
-                    },
-                    timeout=60.0,
-                )
+**Paper Citations**
+* [Paper 1]: [Brief description of its contribution]
+* [Paper 2]: [Brief description of its contribution]
+* [Additional papers as needed]
 
-                if response.status_code != 200:
-                    error_text = await response.text()
-                    raise Exception(f"Error from Ollama API: {error_text}")
+**Limitations**
+* [First limitation or gap in the available information]
+* [Second limitation or gap in the available information]
+* [Additional limitations as needed]
 
-                response_data = response.json()
-                if "error" in response_data:
-                    raise Exception(response_data["error"])
+References:
+[List the full citations of all papers used]
 
-                # Log the Q&A interaction
-                self.conversation_history.append(
-                    {
-                        "timestamp": datetime.now().isoformat(),
-                        "query": query,
-                        "response": response_data.get("response", ""),
-                        "num_papers": len(context.split("Title:")) - 1,
-                    }
-                )
+Remember to:
+1. Be specific and cite papers when making claims
+2. Focus on the main findings relevant to the question
+3. Acknowledge any limitations in the available information"""
 
-                return response_data.get("response", "No response generated")
+    try:
+        async with httpx.AsyncClient() as client:
+            print(f"Ensuring {self.model_name} model is available...")
+            await client.post(
+                "http://localhost:11434/api/pull",
+                json={"name": self.model_name},
+                timeout=60.0,
+            )
 
-        except httpx.TimeoutException:
-            return "Error: Request timed out. Please try again."
-        except Exception as e:
-            return f"Error: Unable to generate response. Details: {str(e)}"
+            response = await client.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": self.model_name,
+                    "prompt": prompt,
+                    "stream": False,
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "top_k": 40,  # Added for better response quality
+                    "repeat_penalty": 1.1,  # Helps avoid repetition
+                    "max_tokens": 2048,  # Ensure enough tokens for full response
+                },
+                timeout=120.0,  # Increased timeout for longer responses
+            )
+
+            if response.status_code != 200:
+                error_text = await response.text()
+                raise Exception(f"Error from Ollama API: {error_text}")
+
+            response_data = response.json()
+            if "error" in response_data:
+                raise Exception(response_data["error"])
+
+            # Log the Q&A interaction
+            self.conversation_history.append({
+                "timestamp": datetime.now().isoformat(),
+                "query": query,
+                "response": response_data.get("response", ""),
+                "num_papers": len(context.split("Title:")) - 1,
+            })
+
+            # Post-process the response to ensure proper formatting
+            response_text = response_data.get("response", "")
+            if "**Main Answer**" not in response_text:
+                # If response isn't properly formatted, restructure it
+                response_text = f"""**Main Answer**
+{response_text}
+
+**Key Points**
+* Key findings from the response
+
+**Paper Citations**
+* Citations from the provided papers
+
+**Limitations**
+* Potential limitations of the analysis"""
+
+            return response_text
+
+    except httpx.TimeoutException:
+        return "Error: Request timed out. Please try again."
+    except Exception as e:
+        return f"Error: Unable to generate response. Details: {str(e)}" 
 
     def explain_relevance_score(self, score: float) -> str:
         """Explain the relevance score in human terms"""
